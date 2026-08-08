@@ -120,6 +120,8 @@ This example is from programming, but apply the same standard to any
 domain - history, biology, marketing, anything: a good question forces
 applying the concept to a new situation; a bad question rewards
 memorizing a definition or the video's own example.
+One more thing to add - the 2 easy questions may test recognition of the concepts in lightly new wording, 
+but never the video's exact examples. The 2 medium and 1 hard question must strictly pass the transfer test — novel scenario, application required, no exceptions.
 
 `;
 /** ==================== END PROMPT BODY ==================== */
