@@ -9,11 +9,15 @@ export default function Page() {
   const [transcript, setTranscript] = useState("");
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<GenerateResponse | null>(null);
+  // Bumped per submission and used as <Result>'s key, so a new run remounts the
+  // subtree and resets both the dismissed banner and any picked answers.
+  const [runId, setRunId] = useState(0);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
     setResult(null);
+    setRunId((n) => n + 1);
     try {
       const res = await fetch("/api/generate", {
         method: "POST",
@@ -78,13 +82,19 @@ export default function Page() {
         </div>
       )}
 
-      {result?.ok && <Result result={result} />}
+      {result?.ok && <Result key={runId} result={result} />}
     </main>
   );
 }
 
 function Result({ result }: { result: GenerateSuccess }) {
   const { data, model_used } = result;
+  const [bannerDismissed, setBannerDismissed] = useState(false);
+
+  // The gate is deliberately soft: low confidence never rejects, it only caveats.
+  const lowConfidence = data.confidence < CONFIDENCE_THRESHOLD;
+  // Confidently non-educational is the only rejection.
+  const rejected = !data.is_educational && !lowConfidence;
 
   return (
     <div className="space-y-4">
@@ -107,20 +117,43 @@ function Result({ result }: { result: GenerateSuccess }) {
         )}
       </details>
 
-      {!data.quiz ? (
+      {/* `!data.quiz` also lands here: with nothing to render, this is the only sane fallback. */}
+      {rejected || !data.quiz ? (
         <div className="border p-3 space-y-1">
-          <div className="font-bold">Out of scope</div>
-          <div className="text-sm">{data.reason}</div>
+          <div className="font-bold">
+            {rejected ? "Out of scope" : "No quiz generated"}
+          </div>
+          {rejected ? (
+            <>
+              <div className="text-sm">
+                This doesn&apos;t appear to be educational content.
+              </div>
+              <div className="text-sm text-gray-600">{data.reason}</div>
+            </>
+          ) : (
+            <div className="text-sm">
+              Couldn&apos;t generate a quiz for this content — try another video.
+            </div>
+          )}
         </div>
       ) : (
         <>
-          {(!data.is_educational || data.confidence < CONFIDENCE_THRESHOLD) && (
-            <div className="border border-yellow-600 bg-yellow-50 p-3 text-sm">
-              <strong>Loosely structured content.</strong> {data.reason}
+          {lowConfidence && !bannerDismissed && (
+            <div className="border border-yellow-600 bg-yellow-50 p-3 text-sm flex gap-3">
+              <span className="grow">
+                This content is loosely structured — quiz quality may be uneven.
+              </span>
+              <button
+                type="button"
+                aria-label="Dismiss"
+                className="shrink-0"
+                onClick={() => setBannerDismissed(true)}
+              >
+                ✕
+              </button>
             </div>
           )}
-          {/* Remount the quiz when a new one arrives so answers/score reset. */}
-          <QuizView key={JSON.stringify(data.quiz.questions[0])} quiz={data.quiz} />
+          <QuizView quiz={data.quiz} />
         </>
       )}
     </div>
