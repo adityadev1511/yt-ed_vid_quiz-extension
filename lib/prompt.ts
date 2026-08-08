@@ -46,6 +46,15 @@ Calibrate confidence honestly: 0.9+ only for clearly structured teaching
 content (lectures, tutorials, courses); 0.5-0.8 for mixed content like
 podcasts, interviews, or commentary with scattered insights; below 0.5
 when instructional content is minimal. Most real-world videos are not 1.0.
+Clear entertainment content — song lyrics, music performances, comedy
+shows, vlogs, reactions with no instructional intent — must be classified
+is_educational: false with confidence 0.8 or higher. Do not hedge on
+these. Low confidence (below 0.65) is reserved only for genuinely mixed
+content: podcasts, interviews, talks, or commentary where real concepts
+are taught amid unstructured conversation. When generating a quiz for
+low-confidence content, questions must come only from concepts actually
+taught in the transcript — never from themes, vibes, or incidental
+word associations.
 
 STEP 2 - GENERATE THE QUIZ
 
