@@ -1,0 +1,19 @@
+# Zerops build & deploy pipeline.
+# Based on the official Next.js + Node.js recipe: github.com/zeropsio/recipe-nextjs-nodejs
+zerops:
+  # Must match the service hostname in the Zerops panel exactly.
+  - setup: app
+    build:
+      base: nodejs@20
+      buildCommands:
+        - npm ci
+        - npm run build
+      # Ship the whole build container: `next start` needs .next AND node_modules
+      # at runtime, so narrowing this list is what usually breaks a Next deploy.
+      deployFiles: ./
+    run:
+      base: nodejs@20
+      ports:
+        - port: 3000
+          httpSupport: true
+      start: npm start
