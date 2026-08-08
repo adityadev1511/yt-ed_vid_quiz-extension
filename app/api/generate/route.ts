@@ -1,15 +1,36 @@
 import { NextResponse } from "next/server";
 
-import type { GenerateResponse } from "@/lib/api-types";
+import type { FailureStage, GenerateResponse } from "@/lib/api-types";
 import { LlmError, generate } from "@/lib/llm";
 import { buildPrompt } from "@/lib/prompt";
 import { LlmResponseSchema } from "@/lib/schema";
 
 // LLM calls are slow and key-dependent: never prerender or cache this.
 export const dynamic = "force-dynamic";
-export const maxDuration = 120;
+// Just above the gateway's 70s total budget, so our own timeout always wins first
+// and the user gets a clean message rather than a platform-level kill.
+export const maxDuration = 85;
 
+/**
+ * Outer guard: without it an unexpected throw returns Next's HTML error page,
+ * which the client cannot parse as JSON — the UI would show a parse failure
+ * instead of the real problem. Every exit from here is typed JSON.
+ */
 export async function POST(req: Request): Promise<NextResponse<GenerateResponse>> {
+  try {
+    return await handle(req);
+  } catch (err) {
+    return fail(
+      500,
+      "server_error",
+      "Unexpected server error.",
+      // Stack included: this is the one failure with no other diagnostic trail.
+      err instanceof Error ? (err.stack ?? `${err.name}: ${err.message}`) : String(err),
+    );
+  }
+}
+
+async function handle(req: Request): Promise<NextResponse<GenerateResponse>> {
   let transcript: unknown;
   try {
     transcript = (await req.json())?.transcript;
@@ -29,12 +50,12 @@ export async function POST(req: Request): Promise<NextResponse<GenerateResponse>
   try {
     result = await generate(buildPrompt(transcript));
   } catch (err) {
-    const detail = err instanceof LlmError ? err.detail : String(err);
+    const timedOut = err instanceof LlmError && err.timedOut;
     return fail(
-      502,
-      "llm_error",
+      timedOut ? 504 : 502,
+      timedOut ? "timeout" : "llm_error",
       err instanceof Error ? err.message : "LLM call failed.",
-      detail,
+      err instanceof LlmError ? err.detail : String(err),
     );
   }
 
@@ -78,12 +99,28 @@ function stripFence(text: string): string {
   return match ? match[1] : text;
 }
 
+/**
+ * The single failure exit. Everything diagnostic goes to the server log (and so
+ * to the Zerops runtime log); the client gets only the stage. If you need more
+ * context to debug a live issue, add it to the log call here — never to the
+ * response body.
+ */
 function fail(
   status: number,
-  stage: Extract<GenerateResponse, { ok: false }>["stage"],
-  message: string,
-  detail?: string,
-  raw?: string,
+  stage: FailureStage,
+  logMessage: string,
+  logDetail?: string,
+  rawOutput?: string,
 ): NextResponse<GenerateResponse> {
-  return NextResponse.json({ ok: false, stage, message, detail, raw }, { status });
+  console.error(
+    [
+      `[api/generate] ${stage} (${status}): ${logMessage}`,
+      logDetail && `  detail: ${logDetail}`,
+      rawOutput && `  raw model output:\n${rawOutput}`,
+    ]
+      .filter(Boolean)
+      .join("\n"),
+  );
+
+  return NextResponse.json({ ok: false, stage }, { status });
 }

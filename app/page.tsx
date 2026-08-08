@@ -1,9 +1,40 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
-import type { GenerateResponse, GenerateSuccess } from "@/lib/api-types";
+import type {
+  FailureStage,
+  GenerateResponse,
+  GenerateSuccess,
+} from "@/lib/api-types";
 import { CONFIDENCE_THRESHOLD, type Quiz } from "@/lib/schema";
+
+/**
+ * One human sentence per failure stage. Exhaustive by construction: the Record
+ * type means a new FailureStage will not compile until it has copy here.
+ */
+const FAILURE_COPY: Record<FailureStage, string> = {
+  bad_request: "Paste a transcript first — a few sentences at minimum.",
+  network: "Couldn't reach the server. Check your connection and try again.",
+  timeout: "Generation is taking too long — please try again.",
+  llm_error: "The AI service didn't respond. This is usually temporary.",
+  invalid_json: "The AI returned something we couldn't read. Trying again usually fixes it.",
+  validation_error:
+    "The AI's answer came back in the wrong shape. Trying again usually fixes it.",
+  server_error: "Something went wrong on our end.",
+};
+
+/**
+ * Above the route's own 70s budget so the server's specific error wins the race;
+ * this is only a backstop for a request that never reaches the route at all.
+ */
+const CLIENT_TIMEOUT_MS = 80_000;
+
+/** Rotates so a long wait reads as progress rather than a stall. */
+const LOADING_PHASES = ["Analyzing transcript…", "Generating questions…"];
+const PHASE_ROTATE_MS = 15_000;
+
+const MIN_TRANSCRIPT_CHARS = 50;
 
 export default function Page() {
   const [transcript, setTranscript] = useState("");
@@ -12,9 +43,28 @@ export default function Page() {
   // Bumped per submission and used as <Result>'s key, so a new run remounts the
   // subtree and resets both the dismissed banner and any picked answers.
   const [runId, setRunId] = useState(0);
+  const [phase, setPhase] = useState(0);
 
-  async function onSubmit(e: React.FormEvent) {
-    e.preventDefault();
+  // Advance the loading copy once, then hold. Resets whenever a run ends, so the
+  // next submission starts from the first phase again.
+  useEffect(() => {
+    if (!loading) {
+      setPhase(0);
+      return;
+    }
+    const timer = setTimeout(() => setPhase(1), PHASE_ROTATE_MS);
+    return () => clearTimeout(timer);
+  }, [loading]);
+
+  // Split from the submit handler so the "Try again" button can re-run it.
+  async function run() {
+    // Validated here as well as server-side so an empty submit gets an instant
+    // answer instead of a pointless round trip.
+    if (transcript.trim().length < MIN_TRANSCRIPT_CHARS) {
+      setResult({ ok: false, stage: "bad_request" });
+      return;
+    }
+
     setLoading(true);
     setResult(null);
     setRunId((n) => n + 1);
@@ -23,18 +73,29 @@ export default function Page() {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ transcript }),
+        signal: AbortSignal.timeout(CLIENT_TIMEOUT_MS),
       });
+      // A non-JSON body here means something upstream of the route failed
+      // (proxy, crash, HTML error page) — treat it as a server error, not a parse bug.
       setResult((await res.json()) as GenerateResponse);
     } catch (err) {
+      // These never reach the server, so the browser console is the only trace
+      // available. It is devtools-only and never rendered.
+      console.error("[generate] request failed:", err);
+      const timedOut = err instanceof Error && err.name === "TimeoutError";
       setResult({
         ok: false,
-        stage: "llm_error",
-        message: "Request failed.",
-        detail: err instanceof Error ? err.message : String(err),
+        stage: timedOut ? "timeout" : err instanceof TypeError ? "network" : "server_error",
       });
     } finally {
+      // In `finally` so the spinner always stops, on every path above.
       setLoading(false);
     }
+  }
+
+  function onSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    void run();
   }
 
   return (
@@ -51,34 +112,36 @@ export default function Page() {
           value={transcript}
           onChange={(e) => setTranscript(e.target.value)}
         />
+        {/* Only disabled while in flight. A too-short transcript is allowed through
+            so the user gets an explanation instead of a dead button. */}
         <button
           type="submit"
           className="border px-3 py-1 disabled:opacity-50"
-          disabled={loading || transcript.trim().length < 50}
+          disabled={loading}
         >
-          {loading ? "Generating…" : "Generate quiz"}
+          {loading ? LOADING_PHASES[phase] : "Generate quiz"}
         </button>
       </form>
 
+      {/* aria-live so the wait, and the phase change, are announced not just shown. */}
+      {loading && (
+        <div role="status" aria-live="polite" className="border p-3 text-sm">
+          {LOADING_PHASES[phase]} this usually takes 20–30 seconds.
+        </div>
+      )}
+
       {result && !result.ok && (
-        <div className="border border-red-500 p-3 space-y-2">
-          <div className="font-bold text-red-700">
-            Failed at: {result.stage}
-          </div>
-          <div className="text-sm">{result.message}</div>
-          {result.detail && (
-            <pre className="overflow-auto text-xs bg-gray-100 p-2 whitespace-pre-wrap">
-              {result.detail}
-            </pre>
-          )}
-          {result.raw && (
-            <details>
-              <summary className="text-xs cursor-pointer">Raw model output</summary>
-              <pre className="overflow-auto text-xs bg-gray-100 p-2 whitespace-pre-wrap">
-                {result.raw}
-              </pre>
-            </details>
-          )}
+        <div className="border border-red-500 p-3 space-y-3">
+          <div className="font-bold text-red-700">Couldn&apos;t generate a quiz</div>
+          <div className="text-sm">{FAILURE_COPY[result.stage]}</div>
+          <button
+            type="button"
+            className="border px-3 py-1 disabled:opacity-50"
+            disabled={loading}
+            onClick={() => void run()}
+          >
+            Try again
+          </button>
         </div>
       )}
 
@@ -88,7 +151,7 @@ export default function Page() {
 }
 
 function Result({ result }: { result: GenerateSuccess }) {
-  const { data, model_used } = result;
+  const { data } = result;
   const [bannerDismissed, setBannerDismissed] = useState(false);
 
   // The gate is deliberately soft: low confidence never rejects, it only caveats.
@@ -98,25 +161,6 @@ function Result({ result }: { result: GenerateSuccess }) {
 
   return (
     <div className="space-y-4">
-      {/* Collapsed by default: useful while iterating on the prompt, noise for a quiz taker. */}
-      <details className="text-xs text-gray-600">
-        <summary className="cursor-pointer">debug</summary>
-        <div className="pt-1">
-          model: {model_used} · educational: {String(data.is_educational)} ·
-          confidence: {data.confidence}
-        </div>
-        <div>topics: {data.detected_topics.join(", ")}</div>
-        {data.quiz && (
-          <ul className="pt-1">
-            {data.quiz.questions.map((q, i) => (
-              <li key={i}>
-                {i + 1}. {q.difficulty} · {q.concept_tag}
-              </li>
-            ))}
-          </ul>
-        )}
-      </details>
-
       {/* `!data.quiz` also lands here: with nothing to render, this is the only sane fallback. */}
       {rejected || !data.quiz ? (
         <div className="border p-3 space-y-1">
