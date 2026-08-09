@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import type {
   FailureStage,
@@ -9,6 +9,7 @@ import type {
 } from "@/lib/api-types";
 import { EXAMPLE_TRANSCRIPT } from "@/lib/example-transcript";
 import { CONFIDENCE_THRESHOLD, type Quiz } from "@/lib/schema";
+import type { TranscriptFailure, TranscriptResult } from "@/lib/transcript-types";
 
 /**
  * One human sentence per failure stage. Exhaustive by construction: the Record
@@ -26,10 +27,31 @@ const FAILURE_COPY: Record<FailureStage, string> = {
 };
 
 /**
+ * Caption fetching is best-effort, so every failure reason lands on the same
+ * instruction: paste it yourself. `invalid_url` is the exception — the user's
+ * next action there is fixing the URL, not reaching for the transcript.
+ */
+const FETCH_FALLBACK_COPY =
+  "Couldn't fetch captions for this video — paste the transcript instead (YouTube: …more → Show transcript).";
+
+const TRANSCRIPT_NOTICE: Record<TranscriptFailure["reason"], string> = {
+  invalid_url:
+    "That doesn't look like a YouTube link — check the URL, or paste the transcript below.",
+  no_captions: FETCH_FALLBACK_COPY,
+  unavailable: FETCH_FALLBACK_COPY,
+  blocked: FETCH_FALLBACK_COPY,
+  timeout: FETCH_FALLBACK_COPY,
+  unknown: FETCH_FALLBACK_COPY,
+};
+
+/**
  * Above the route's own 70s budget so the server's specific error wins the race;
  * this is only a backstop for a request that never reaches the route at all.
  */
 const CLIENT_TIMEOUT_MS = 80_000;
+
+/** Likewise a backstop, above the transcript route's own 10s fetch timeout. */
+const TRANSCRIPT_TIMEOUT_MS = 20_000;
 
 /** Rotates so a long wait reads as progress rather than a stall. */
 const LOADING_PHASES = ["Analyzing transcript…", "Generating questions…"];
@@ -53,24 +75,42 @@ const CARD = "rounded-xl border border-line bg-surface";
 const LABEL = "text-[11px] font-medium uppercase tracking-[0.12em] text-muted";
 
 export default function Page() {
+  const [url, setUrl] = useState("");
   const [transcript, setTranscript] = useState("");
-  const [loading, setLoading] = useState(false);
+  // Which URL's captions are already sitting in the textarea, so re-submitting
+  // does not re-fetch what we just fetched.
+  const [fetchedFor, setFetchedFor] = useState<string | null>(null);
+  // Which URL's captions we already failed on, so a user who followed the
+  // "paste instead" instruction is not sent back through the same failing fetch.
+  const [failedFor, setFailedFor] = useState<string | null>(null);
+  const [notice, setNotice] = useState<TranscriptFailure["reason"] | null>(null);
+  const [busy, setBusy] = useState<null | "fetching" | "generating">(null);
   const [result, setResult] = useState<GenerateResponse | null>(null);
   // Bumped per submission and used as <Result>'s key, so a new run remounts the
   // subtree and resets both the dismissed banner and any picked answers.
   const [runId, setRunId] = useState(0);
   const [phase, setPhase] = useState(0);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const loading = busy !== null;
 
   // Advance the loading copy once, then hold. Resets whenever a run ends, so the
   // next submission starts from the first phase again.
   useEffect(() => {
-    if (!loading) {
+    if (busy !== "generating") {
       setPhase(0);
       return;
     }
     const timer = setTimeout(() => setPhase(1), PHASE_ROTATE_MS);
     return () => clearTimeout(timer);
-  }, [loading]);
+  }, [busy]);
+
+  // Never a dead end: when captions fail, put the cursor where the user can act.
+  // Driven off the notice rather than called inline so it runs after the render
+  // that re-enables the textarea.
+  useEffect(() => {
+    if (notice) textareaRef.current?.focus();
+  }, [notice]);
 
   // Split from the submit handler so "Try again" and "Try an example" can re-run it.
   // Takes the text explicitly: setTranscript does not apply until the next render,
@@ -83,7 +123,7 @@ export default function Page() {
       return;
     }
 
-    setLoading(true);
+    setBusy("generating");
     setResult(null);
     setRunId((n) => n + 1);
     try {
@@ -107,18 +147,74 @@ export default function Page() {
       });
     } finally {
       // In `finally` so the spinner always stops, on every path above.
-      setLoading(false);
+      setBusy(null);
     }
   }
 
-  function onSubmit(e: React.FormEvent) {
+  /**
+   * Returns the fetched transcript, or null when the user has been degraded to
+   * the paste flow. Deliberately swallows every failure into a notice: this is a
+   * best-effort convenience, and nothing here should ever block the paste path.
+   */
+  async function fetchCaptions(target: string): Promise<string | null> {
+    setBusy("fetching");
+    setResult(null);
+    try {
+      const res = await fetch("/api/transcript", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ url: target }),
+        signal: AbortSignal.timeout(TRANSCRIPT_TIMEOUT_MS),
+      });
+      const data = (await res.json()) as TranscriptResult;
+      if (!data.ok) return degrade(target, data.reason);
+
+      setTranscript(data.transcript);
+      setFetchedFor(target);
+      return data.transcript;
+    } catch (err) {
+      // Never reached the route, so the browser console is the only trace.
+      console.error("[transcript] request failed:", err);
+      return degrade(target, "unknown");
+    }
+  }
+
+  function degrade(target: string, reason: TranscriptFailure["reason"]): null {
+    setBusy(null);
+    setFailedFor(target);
+    setNotice(reason);
+    return null;
+  }
+
+  async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
-    void run();
+    setNotice(null);
+
+    const target = url.trim();
+    const pastedEnough = transcript.trim().length >= MIN_TRANSCRIPT_CHARS;
+    // Skip the fetch when there is no URL, when we already have this URL's
+    // captions, or when this URL failed and the user did what we asked and
+    // pasted. That last case is the whole point of the fallback: following the
+    // instruction must not send you back through the fetch that just failed.
+    // A failed URL with an empty textarea still retries — blocks are often transient.
+    if (!target || target === fetchedFor || (target === failedFor && pastedEnough)) {
+      void run(transcript);
+      return;
+    }
+
+    const fetched = await fetchCaptions(target);
+    // null means the notice is already up and the textarea has focus.
+    if (fetched !== null) void run(fetched);
   }
 
   // Fills the textarea and submits in one click. The transcript is passed through
   // rather than read back from state, which has not updated yet at this point.
+  // Clears the URL so the example never triggers a caption fetch.
   function loadExample() {
+    setUrl("");
+    setFetchedFor(null);
+    setFailedFor(null);
+    setNotice(null);
     setTranscript(EXAMPLE_TRANSCRIPT);
     void run(EXAMPLE_TRANSCRIPT);
   }
@@ -156,10 +252,56 @@ export default function Page() {
       </header>
 
       <form onSubmit={onSubmit} className="mt-12">
-        {/* Textarea and submit share one panel so they read as a single control. */}
+        {/* URL, transcript and submit share one panel so they read as a single
+            control — the URL is the fast path, the textarea the guaranteed one. */}
         <div className="overflow-hidden rounded-xl border border-line bg-surface transition-colors focus-within:border-accent/50">
+          <div className="border-b border-line px-4 py-3.5">
+            <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+              <label htmlFor="yt-url" className={LABEL}>
+                YouTube URL
+              </label>
+              <span className="text-xs text-muted">
+                Best effort — paste always works.
+              </span>
+            </div>
+            {/* type="text", not type="url": native URL validation rejects a
+                scheme-less "youtube.com/watch?v=…", which we accept. */}
+            <input
+              id="yt-url"
+              type="text"
+              inputMode="url"
+              autoComplete="off"
+              spellCheck={false}
+              className="mt-2.5 block w-full bg-transparent text-sm outline-none placeholder:text-muted"
+              placeholder="https://www.youtube.com/watch?v=…"
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+            />
+          </div>
+
+          {notice && (
+            <div className="flex items-start gap-2.5 border-b border-line bg-warn/[0.07] px-4 py-3">
+              <span className="mt-0.5 shrink-0 text-warn">
+                <AlertIcon />
+              </span>
+              <p className="text-sm leading-relaxed text-fg/90">
+                {TRANSCRIPT_NOTICE[notice]}
+              </p>
+            </div>
+          )}
+
+          <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 px-4 pt-3.5">
+            <label htmlFor="transcript" className={LABEL}>
+              Transcript
+            </label>
+            {fetchedFor && transcript && (
+              <span className="text-xs text-muted">Filled from captions</span>
+            )}
+          </div>
           <textarea
-            className="block h-52 w-full resize-none bg-transparent p-4 text-sm leading-relaxed outline-none placeholder:text-muted sm:h-64"
+            id="transcript"
+            ref={textareaRef}
+            className="block h-44 w-full resize-none bg-transparent px-4 pb-4 pt-2.5 text-sm leading-relaxed outline-none placeholder:text-muted sm:h-52"
             placeholder="Paste raw transcript here…"
             value={transcript}
             onChange={(e) => setTranscript(e.target.value)}
@@ -173,14 +315,29 @@ export default function Page() {
             {/* Only disabled while in flight. A too-short transcript is allowed
                 through so the user gets an explanation, not a dead button. */}
             <button type="submit" className={BTN_SOLID} disabled={loading}>
-              {loading ? "Generating…" : "Generate quiz"}
+              {busy === "fetching"
+                ? "Fetching…"
+                : busy === "generating"
+                  ? "Generating…"
+                  : "Generate quiz"}
             </button>
           </div>
         </div>
       </form>
 
       <div className="mt-8">
-        {loading && <Loading phase={phase} />}
+        {busy === "fetching" && (
+          <Loading
+            label="Fetching captions…"
+            hint="If this doesn't work, you can paste the transcript instead."
+          />
+        )}
+        {busy === "generating" && (
+          <Loading
+            label={LOADING_PHASES[phase]}
+            hint="This usually takes 20–30 seconds."
+          />
+        )}
 
         {result && !result.ok && (
           <div className={`${CARD} border-bad/30 bg-bad/[0.04] p-6`}>
@@ -194,7 +351,9 @@ export default function Page() {
               type="button"
               className={`${BTN_GHOST} mt-5`}
               disabled={loading}
-              onClick={() => void run()}
+              // Retries generation with whatever is in the textarea; it never
+              // re-fetches captions, which have already succeeded by this point.
+              onClick={() => void run(transcript)}
             >
               Try again
             </button>
@@ -208,7 +367,7 @@ export default function Page() {
 }
 
 /* aria-live so the wait, and the phase change, are announced and not just shown. */
-function Loading({ phase }: { phase: number }) {
+function Loading({ label, hint }: { label: string; hint: string }) {
   return (
     <div role="status" aria-live="polite" className={`${CARD} p-6`}>
       <div className="flex items-center gap-3">
@@ -216,11 +375,9 @@ function Loading({ phase }: { phase: number }) {
           <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-accent opacity-60" />
           <span className="relative inline-flex h-2 w-2 rounded-full bg-accent" />
         </span>
-        <span className="text-sm font-medium">{LOADING_PHASES[phase]}</span>
+        <span className="text-sm font-medium">{label}</span>
       </div>
-      <p className="mt-2 pl-5 text-sm text-muted">
-        This usually takes 20–30 seconds.
-      </p>
+      <p className="mt-2 pl-5 text-sm text-muted">{hint}</p>
       {/* Sweeps rather than filling: we cannot estimate completion, and a fake
           percentage that stalls at 90% is worse than an honest indeterminate bar. */}
       <div className="mt-5 h-1 w-full overflow-hidden rounded-full bg-elevated">
@@ -477,6 +634,24 @@ function CheckIcon({ className = "" }: { className?: string }) {
       aria-hidden
     >
       <path d="M3 8.5 6.5 12 13 4" />
+    </svg>
+  );
+}
+
+function AlertIcon() {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      className="h-4 w-4"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      aria-hidden
+    >
+      <circle cx="8" cy="8" r="6.5" />
+      <path d="M8 4.75v3.75" />
+      <path d="M8 11.25h.008" />
     </svg>
   );
 }
