@@ -80,6 +80,11 @@ export default function Page() {
   // Which URL's captions are already sitting in the textarea, so re-submitting
   // does not re-fetch what we just fetched.
   const [fetchedFor, setFetchedFor] = useState<string | null>(null);
+  // The video id, and the exact text we got for it. The quiz is only cached
+  // against the video when the transcript is still verbatim what YouTube gave
+  // us — otherwise an edited transcript would poison that video's cache entry.
+  const [fetchedVideoId, setFetchedVideoId] = useState<string | null>(null);
+  const [fetchedTranscript, setFetchedTranscript] = useState<string | null>(null);
   // Which URL's captions we already failed on, so a user who followed the
   // "paste instead" instruction is not sent back through the same failing fetch.
   const [failedFor, setFailedFor] = useState<string | null>(null);
@@ -115,13 +120,25 @@ export default function Page() {
   // Split from the submit handler so "Try again" and "Try an example" can re-run it.
   // Takes the text explicitly: setTranscript does not apply until the next render,
   // so the example button must pass its transcript rather than rely on state.
-  async function run(text: string = transcript) {
+  async function run(
+    text: string = transcript,
+    opts: { force?: boolean; videoId?: string | null } = {},
+  ) {
     // Validated here as well as server-side so an empty submit gets an instant
     // answer instead of a pointless round trip.
     if (text.trim().length < MIN_TRANSCRIPT_CHARS) {
       setResult({ ok: false, stage: "bad_request" });
       return;
     }
+
+    // Passed explicitly straight after a fetch, since that state has not applied
+    // yet; derived from state everywhere else.
+    const videoId =
+      opts.videoId !== undefined
+        ? opts.videoId
+        : text === fetchedTranscript
+          ? fetchedVideoId
+          : null;
 
     setBusy("generating");
     setResult(null);
@@ -130,7 +147,7 @@ export default function Page() {
       const res = await fetch("/api/generate", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ transcript: text }),
+        body: JSON.stringify({ transcript: text, video_id: videoId, force: opts.force }),
         signal: AbortSignal.timeout(CLIENT_TIMEOUT_MS),
       });
       // A non-JSON body here means something upstream of the route failed
@@ -156,7 +173,9 @@ export default function Page() {
    * the paste flow. Deliberately swallows every failure into a notice: this is a
    * best-effort convenience, and nothing here should ever block the paste path.
    */
-  async function fetchCaptions(target: string): Promise<string | null> {
+  async function fetchCaptions(
+    target: string,
+  ): Promise<{ text: string; videoId: string } | null> {
     setBusy("fetching");
     setResult(null);
     try {
@@ -171,7 +190,9 @@ export default function Page() {
 
       setTranscript(data.transcript);
       setFetchedFor(target);
-      return data.transcript;
+      setFetchedVideoId(data.video_id);
+      setFetchedTranscript(data.transcript);
+      return { text: data.transcript, videoId: data.video_id };
     } catch (err) {
       // Never reached the route, so the browser console is the only trace.
       console.error("[transcript] request failed:", err);
@@ -204,7 +225,7 @@ export default function Page() {
 
     const fetched = await fetchCaptions(target);
     // null means the notice is already up and the textarea has focus.
-    if (fetched !== null) void run(fetched);
+    if (fetched !== null) void run(fetched.text, { videoId: fetched.videoId });
   }
 
   // Fills the textarea and submits in one click. The transcript is passed through
@@ -214,6 +235,8 @@ export default function Page() {
     setUrl("");
     setFetchedFor(null);
     setFailedFor(null);
+    setFetchedVideoId(null);
+    setFetchedTranscript(null);
     setNotice(null);
     setTranscript(EXAMPLE_TRANSCRIPT);
     void run(EXAMPLE_TRANSCRIPT);
@@ -360,7 +383,29 @@ export default function Page() {
           </div>
         )}
 
-        {result?.ok && <Result key={runId} result={result} />}
+        {result?.ok && (
+          <div className="space-y-6">
+            {/* Deliberately quiet: a cache hit is an implementation detail, but
+                one the user needs if they want a different set of questions. */}
+            {result.cached && (
+              <div className="flex items-center justify-between gap-3 rounded-lg border border-line bg-elevated px-4 py-2.5">
+                <span className="flex items-center gap-2 text-xs text-muted">
+                  <CacheIcon />
+                  Served from an earlier run
+                </span>
+                <button
+                  type="button"
+                  className="rounded text-xs font-medium text-muted underline underline-offset-4 transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:opacity-50"
+                  disabled={loading}
+                  onClick={() => void run(transcript, { force: true })}
+                >
+                  Regenerate
+                </button>
+              </div>
+            )}
+            <Result key={runId} result={result} />
+          </div>
+        )}
       </div>
     </main>
   );
@@ -634,6 +679,25 @@ function CheckIcon({ className = "" }: { className?: string }) {
       aria-hidden
     >
       <path d="M3 8.5 6.5 12 13 4" />
+    </svg>
+  );
+}
+
+function CacheIcon() {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      className="h-3.5 w-3.5"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <ellipse cx="8" cy="4" rx="5.5" ry="2.25" />
+      <path d="M2.5 4v8c0 1.24 2.46 2.25 5.5 2.25s5.5-1.01 5.5-2.25V4" />
+      <path d="M2.5 8c0 1.24 2.46 2.25 5.5 2.25s5.5-1.01 5.5-2.25" />
     </svg>
   );
 }

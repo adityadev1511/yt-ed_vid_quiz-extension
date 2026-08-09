@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import type { FailureStage, GenerateResponse } from "@/lib/api-types";
+import { hashTranscript, lookupQuiz, saveQuiz } from "@/lib/db";
 import { LlmError, generate } from "@/lib/llm";
 import { buildPrompt } from "@/lib/prompt";
 import { LlmResponseSchema } from "@/lib/schema";
@@ -31,19 +32,40 @@ export async function POST(req: Request): Promise<NextResponse<GenerateResponse>
 }
 
 async function handle(req: Request): Promise<NextResponse<GenerateResponse>> {
-  let transcript: unknown;
+  let body: { transcript?: unknown; video_id?: unknown; force?: unknown };
   try {
-    transcript = (await req.json())?.transcript;
+    body = await req.json();
   } catch {
     return fail(400, "bad_request", "Body was not valid JSON.");
   }
 
+  const transcript = body?.transcript;
   if (typeof transcript !== "string" || transcript.trim().length < 50) {
     return fail(
       400,
       "bad_request",
       "Paste a transcript of at least 50 characters.",
     );
+  }
+
+  const videoId = typeof body.video_id === "string" ? body.video_id : null;
+  const force = body.force === true;
+  const transcriptHash = hashTranscript(transcript);
+
+  // Cache read. Bounded by short DB timeouts and swallowing its own failures, so
+  // the worst case here is a few seconds slower than the stateless path, never
+  // a failed request.
+  if (!force) {
+    const hit = await lookupQuiz(transcriptHash, videoId);
+    if (hit) {
+      console.log(`[api/generate] cache hit (${videoId ?? transcriptHash.slice(0, 12)})`);
+      return NextResponse.json({
+        ok: true,
+        model_used: hit.model_used,
+        data: hit.data,
+        cached: true,
+      });
+    }
   }
 
   let result;
@@ -90,10 +112,21 @@ async function handle(req: Request): Promise<NextResponse<GenerateResponse>> {
     );
   }
 
+  // Awaited rather than fired and forgotten: the serverless-style request
+  // lifecycle can end the moment we respond, which would cut a detached write
+  // off mid-flight. saveQuiz never throws and is bounded by the same timeouts.
+  await saveQuiz({
+    transcriptHash,
+    videoId,
+    data: validated.data,
+    modelUsed: result.model_used,
+  });
+
   return NextResponse.json({
     ok: true,
     model_used: result.model_used,
     data: validated.data,
+    cached: false,
   });
 }
 

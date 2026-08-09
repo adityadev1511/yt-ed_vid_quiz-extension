@@ -5,6 +5,19 @@ export type GenerateSuccess = {
   ok: true;
   model_used: string;
   data: LlmResponse;
+  /** True when this came from the quiz cache rather than a fresh LLM call. */
+  cached: boolean;
+};
+
+export type GenerateRequest = {
+  transcript: string;
+  /**
+   * Present only when the transcript is exactly what we fetched for that video,
+   * so a hand-edited transcript is never cached under the video's id.
+   */
+  video_id?: string | null;
+  /** Regenerate: skip the cache read, and overwrite whatever is stored. */
+  force?: boolean;
 };
 
 /**
