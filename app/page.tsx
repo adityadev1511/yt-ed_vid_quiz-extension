@@ -7,6 +7,7 @@ import type {
   GenerateResponse,
   GenerateSuccess,
 } from "@/lib/api-types";
+import { EXAMPLE_TRANSCRIPT } from "@/lib/example-transcript";
 import { CONFIDENCE_THRESHOLD, type Quiz } from "@/lib/schema";
 
 /**
@@ -56,11 +57,13 @@ export default function Page() {
     return () => clearTimeout(timer);
   }, [loading]);
 
-  // Split from the submit handler so the "Try again" button can re-run it.
-  async function run() {
+  // Split from the submit handler so "Try again" and "Try an example" can re-run it.
+  // Takes the text explicitly: setTranscript does not apply until the next render,
+  // so the example button must pass its transcript rather than rely on state.
+  async function run(text: string = transcript) {
     // Validated here as well as server-side so an empty submit gets an instant
     // answer instead of a pointless round trip.
-    if (transcript.trim().length < MIN_TRANSCRIPT_CHARS) {
+    if (text.trim().length < MIN_TRANSCRIPT_CHARS) {
       setResult({ ok: false, stage: "bad_request" });
       return;
     }
@@ -72,7 +75,7 @@ export default function Page() {
       const res = await fetch("/api/generate", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ transcript }),
+        body: JSON.stringify({ transcript: text }),
         signal: AbortSignal.timeout(CLIENT_TIMEOUT_MS),
       });
       // A non-JSON body here means something upstream of the route failed
@@ -98,12 +101,34 @@ export default function Page() {
     void run();
   }
 
+  // Fills the textarea and submits in one click. The transcript is passed through
+  // rather than read back from state, which has not updated yet at this point.
+  function loadExample() {
+    setTranscript(EXAMPLE_TRANSCRIPT);
+    void run(EXAMPLE_TRANSCRIPT);
+  }
+
   return (
     <main className="mx-auto max-w-3xl p-6 space-y-6">
-      <h1 className="text-xl font-bold">YT Quiz Tool — Phase 0 spike</h1>
-      <p className="text-sm text-gray-600">
-        Paste a transcript. No YouTube fetching, no DB, no auth.
-      </p>
+      <header className="space-y-3">
+        <h1 className="text-3xl font-bold">Watching isn&apos;t learning.</h1>
+        <p className="text-base text-gray-700">
+          This tool tests whether you actually understood a video — every question
+          forces you to apply concepts to NEW situations, never to recall the
+          video&apos;s own examples. Paste a transcript (or try the example) and find
+          out what stuck.
+        </p>
+        {/* Solid, unlike the outlined controls below: with an empty textarea this
+            is the lowest-friction way in, so it carries the visual weight. */}
+        <button
+          type="button"
+          className="bg-black text-white px-4 py-2 font-medium disabled:opacity-50"
+          disabled={loading}
+          onClick={loadExample}
+        >
+          Try an example
+        </button>
+      </header>
 
       <form onSubmit={onSubmit} className="space-y-2">
         <textarea

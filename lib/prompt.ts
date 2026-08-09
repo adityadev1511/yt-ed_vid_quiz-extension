@@ -167,12 +167,61 @@ Each question object has exactly these keys:
 Decide is_educational and confidence BEFORE generating any questions.
 `.trim();
 
-export function buildPrompt(transcript: string): string {
+/**
+ * Appended ONLY on the Groq fallback path.
+ *
+ * Groq gets no schema enforcement (json_schema is unsupported on the Llama
+ * models) and was observed opening a quiz with "What is the primary purpose of
+ * creating an index in a database?" — a definition question the rubric forbids.
+ * So the rules that break first are restated compactly, last, where recency is
+ * strongest.
+ *
+ * This is a COMPRESSION of rules already in PROMPT_BODY, using the wording
+ * Aditya supplied — not new instruction design. Yours to edit.
+ */
+export const FALLBACK_CONSTRAINTS = `
+CRITICAL CONSTRAINTS — follow these exactly.
+
+TRANSFER RULE: no question may be answerable by recalling a stated fact or
+definition. Medium and hard questions must present a NEW scenario requiring
+application of the concept.
+
+DIFFICULTY SPLIT: exactly 5 questions — 2 easy, 2 medium, 1 hard.
+
+OUTPUT SCHEMA: a single JSON object, no markdown fences, no prose.
+{
+  "is_educational": boolean,
+  "confidence": number between 0 and 1,
+  "detected_topics": array of strings,
+  "reason": string,
+  "quiz": null OR {
+    "questions": [
+      {
+        "question": string,
+        "options": array of EXACTLY 4 strings,
+        "correct_index": integer 0-3,
+        "explanation": string,
+        "difficulty": "easy" | "medium" | "hard",
+        "concept_tag": string
+      }
+    ],
+    "deeper_topics": array of strings
+  }
+}
+`.trim();
+
+export function buildPrompt(
+  transcript: string,
+  opts: { reinforce?: boolean } = {},
+): string {
   return [
     PROMPT_BODY.trim(),
     SCHEMA_CONTRACT,
     "TRANSCRIPT:",
     transcript.trim(),
+    // Last position on purpose: this is a reminder of rules already stated, and
+    // the weaker fallback model follows what it read most recently.
+    opts.reinforce ? FALLBACK_CONSTRAINTS : "",
   ]
     .filter(Boolean)
     .join("\n\n");

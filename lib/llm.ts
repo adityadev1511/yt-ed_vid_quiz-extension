@@ -1,4 +1,4 @@
-import { GEMINI_RESPONSE_SCHEMA } from "./schema";
+import { GEMINI_RESPONSE_SCHEMA, GROQ_JSON_SCHEMA } from "./schema";
 
 /**
  * Thin LLM gateway: Gemini 2.5 Flash primary, Groq (Llama) fallback.
@@ -14,6 +14,8 @@ export class LlmError extends Error {
     readonly detail?: string,
     /** True when the failure was a hung request we gave up on, not a rejection. */
     readonly timedOut = false,
+    /** HTTP status, when the failure came from a provider response. */
+    readonly status?: number,
   ) {
     super(message);
     this.name = "LlmError";
@@ -26,7 +28,10 @@ export type LlmResult = {
 };
 
 const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
-const GROQ_MODEL = process.env.GROQ_MODEL || "llama-3.3-70b-versatile";
+const GROQ_MODEL = process.env.GROQ_MODEL || "openai/gpt-oss-120b";
+
+/** low | medium | high. Only read for gpt-oss models. */
+const GROQ_REASONING_EFFORT = process.env.GROQ_REASONING_EFFORT || "medium";
 
 /**
  * Per-provider ceiling for a single call. Gemini gets ~2x its observed worst
@@ -60,17 +65,29 @@ const ATTEMPTS: Array<{
   { label: "groq fallback", provider: "groq", call: callGroq },
 ];
 
-export async function generate(prompt: string): Promise<LlmResult> {
+/** The primary and fallback variants of the same request; see buildPrompt(). */
+export type Prompts = { primary: string; fallback: string };
+
+export async function generate(prompts: Prompts): Promise<LlmResult> {
+  // Testing switch: exercise the fallback without waiting for Gemini to fail.
+  const forceFallback = process.env.FORCE_FALLBACK === "true";
+  const attempts = forceFallback
+    ? ATTEMPTS.filter((a) => a.provider === "groq")
+    : ATTEMPTS;
+  if (forceFallback) console.warn("[llm] FORCE_FALLBACK=true — skipping Gemini.");
+
   const deadline = Date.now() + TOTAL_BUDGET_MS;
   const failures: Array<{ text: string; timedOut: boolean }> = [];
-  // A provider that just timed out gets no retry: it is slow, not flaky, so a
-  // second attempt would burn the budget the fallback needs.
-  const timedOutProviders = new Set<Provider>();
+  // Providers whose remaining attempts are pointless, mapped to the reason.
+  // A timeout means slow-not-flaky, and a 429 means the quota is gone for longer
+  // than our whole budget — retrying either just delays the fallback.
+  const noRetry = new Map<Provider, string>();
 
-  for (const { label, provider, call } of ATTEMPTS) {
-    if (timedOutProviders.has(provider)) {
+  for (const { label, provider, call } of attempts) {
+    const skipReason = noRetry.get(provider);
+    if (skipReason) {
       failures.push({
-        text: `${label}: skipped, ${provider} already timed out`,
+        text: `${label}: skipped, ${provider} ${skipReason}`,
         timedOut: false,
       });
       continue;
@@ -88,10 +105,28 @@ export async function generate(prompt: string): Promise<LlmResult> {
     // Never let one attempt run past the overall budget.
     const timeoutMs = Math.min(PROVIDER_TIMEOUT_MS[provider], remaining);
     try {
-      return await call(prompt, timeoutMs);
+      // Groq gets the reinforced variant; Gemini has responseSchema enforcement
+      // and follows the base prompt reliably.
+      const prompt = provider === "groq" ? prompts.fallback : prompts.primary;
+      const result = await call(prompt, timeoutMs);
+
+      // A request that succeeds on a later attempt still returns HTTP 200, so
+      // without this the log shows a healthy app while the weaker model quietly
+      // carries every request. This is the only signal that degradation started.
+      if (failures.length > 0) {
+        console.warn(
+          [
+            `[llm] DEGRADED: served by ${result.model_used} after ${failures.length} failed attempt(s)`,
+            ...failures.map((f) => `  ${f.text}`),
+          ].join("\n"),
+        );
+      }
+
+      return result;
     } catch (err) {
       const timedOut = isTimeout(err);
-      if (timedOut) timedOutProviders.add(provider);
+      if (timedOut) noRetry.set(provider, "already timed out");
+      else if (isRateLimited(err)) noRetry.set(provider, "is rate limited (429)");
       failures.push({ text: `${label}: ${errorText(err)}`, timedOut });
     }
   }
@@ -103,6 +138,16 @@ export async function generate(prompt: string): Promise<LlmResult> {
     // even when a later provider failed for some other reason.
     failures.some((f) => f.timedOut),
   );
+}
+
+/**
+ * Quota/rate-limit rejection. Gemini's free tier answers these in ~200ms with a
+ * "retry in ~53s" hint — longer than the whole gateway budget — so a second
+ * attempt is guaranteed to fail. Not treated as a timeout: the user-facing
+ * failure is llm_error, not "taking too long".
+ */
+function isRateLimited(err: unknown): boolean {
+  return err instanceof LlmError && err.status === 429;
 }
 
 function isTimeout(err: unknown): boolean {
@@ -135,7 +180,7 @@ async function callGemini(prompt: string, timeoutMs: number): Promise<LlmResult>
   );
 
   if (!res.ok) {
-    throw new LlmError(`Gemini HTTP ${res.status}`, await res.text());
+    throw new LlmError(`Gemini HTTP ${res.status}`, await res.text(), false, res.status);
   }
 
   const body = await res.json();
@@ -157,15 +202,19 @@ async function callGemini(prompt: string, timeoutMs: number): Promise<LlmResult>
   return { text, model_used: GEMINI_MODEL };
 }
 
+/** Only the gpt-oss family accepts strict json_schema and reasoning_effort. */
+const isGptOss = (model: string) => model.startsWith("openai/gpt-oss");
+
 /**
- * Fallback stub. Groq's OpenAI-compatible endpoint has no response-schema
- * enforcement, only json_object mode — the shape is carried by SCHEMA_CONTRACT in
- * the prompt and caught by Zod if the model wanders. Untested against a live key
- * so far; it exists so the fallback path is real code rather than a TODO.
+ * Fallback path. On gpt-oss the response is schema-enforced by Groq itself; on
+ * Llama models only json_object mode exists, so the shape rests on the prompt's
+ * constraint block and Zod catches anything that wanders.
  */
 async function callGroq(prompt: string, timeoutMs: number): Promise<LlmResult> {
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) throw new LlmError("GROQ_API_KEY is not set; fallback skipped.");
+
+  const structured = isGptOss(GROQ_MODEL);
 
   const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
@@ -176,13 +225,25 @@ async function callGroq(prompt: string, timeoutMs: number): Promise<LlmResult> {
     body: JSON.stringify({
       model: GROQ_MODEL,
       messages: [{ role: "user", content: prompt }],
-      response_format: { type: "json_object" },
+      response_format: structured
+        ? {
+            type: "json_schema",
+            json_schema: {
+              name: "quiz_response",
+              strict: true,
+              schema: GROQ_JSON_SCHEMA,
+            },
+          }
+        : { type: "json_object" },
+      // Reasoning costs latency, and this path already runs after a failure.
+      // Only gpt-oss accepts the parameter; sending it elsewhere is an error.
+      ...(structured ? { reasoning_effort: GROQ_REASONING_EFFORT } : {}),
     }),
     signal: AbortSignal.timeout(timeoutMs),
   });
 
   if (!res.ok) {
-    throw new LlmError(`Groq HTTP ${res.status}`, await res.text());
+    throw new LlmError(`Groq HTTP ${res.status}`, await res.text(), false, res.status);
   }
 
   const body = await res.json();

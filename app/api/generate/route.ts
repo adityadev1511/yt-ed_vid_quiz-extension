@@ -48,7 +48,10 @@ async function handle(req: Request): Promise<NextResponse<GenerateResponse>> {
 
   let result;
   try {
-    result = await generate(buildPrompt(transcript));
+    result = await generate({
+      primary: buildPrompt(transcript),
+      fallback: buildPrompt(transcript, { reinforce: true }),
+    });
   } catch (err) {
     const timedOut = err instanceof LlmError && err.timedOut;
     return fail(

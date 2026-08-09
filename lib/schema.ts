@@ -48,6 +48,57 @@ export const CONFIDENCE_THRESHOLD = 0.65;
  * Deliberately looser than the Zod schema (no array length bounds, no index range)
  * — Zod is the enforcement layer; this just steers generation.
  */
+/**
+ * The same shape again, as strict JSON Schema for Groq's structured outputs
+ * (OpenAI-compatible subset). Differs from the Gemini one: strict mode requires
+ * additionalProperties:false and every property listed in `required`, and
+ * expresses a nullable field as a type union rather than a `nullable` flag.
+ *
+ * Only the gpt-oss family accepts this; Llama models fall back to json_object.
+ */
+export const GROQ_JSON_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["is_educational", "confidence", "detected_topics", "reason", "quiz"],
+  properties: {
+    is_educational: { type: "boolean" },
+    confidence: { type: "number" },
+    detected_topics: { type: "array", items: { type: "string" } },
+    reason: { type: "string" },
+    quiz: {
+      type: ["object", "null"],
+      additionalProperties: false,
+      required: ["questions", "deeper_topics"],
+      properties: {
+        questions: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: [
+              "question",
+              "options",
+              "correct_index",
+              "explanation",
+              "difficulty",
+              "concept_tag",
+            ],
+            properties: {
+              question: { type: "string" },
+              options: { type: "array", items: { type: "string" } },
+              correct_index: { type: "integer" },
+              explanation: { type: "string" },
+              difficulty: { type: "string", enum: ["easy", "medium", "hard"] },
+              concept_tag: { type: "string" },
+            },
+          },
+        },
+        deeper_topics: { type: "array", items: { type: "string" } },
+      },
+    },
+  },
+} as const;
+
 export const GEMINI_RESPONSE_SCHEMA = {
   type: "object",
   properties: {
