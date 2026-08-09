@@ -37,6 +37,21 @@ const PHASE_ROTATE_MS = 15_000;
 
 const MIN_TRANSCRIPT_CHARS = 50;
 
+/**
+ * Shared control styling. Kept as constants rather than a component wrapper —
+ * three buttons do not justify an abstraction, and this keeps the markup honest
+ * about what it renders.
+ */
+const BTN_BASE =
+  "inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:ring-offset-2 focus-visible:ring-offset-bg disabled:cursor-not-allowed disabled:opacity-50";
+/** The one accent-filled control on the page: the lowest-friction way in. */
+const BTN_ACCENT = `${BTN_BASE} bg-accent text-accent-fg hover:bg-accent/90`;
+const BTN_SOLID = `${BTN_BASE} bg-fg text-bg hover:bg-fg/85`;
+const BTN_GHOST = `${BTN_BASE} border border-line bg-surface hover:bg-elevated`;
+
+const CARD = "rounded-xl border border-line bg-surface";
+const LABEL = "text-[11px] font-medium uppercase tracking-[0.12em] text-muted";
+
 export default function Page() {
   const [transcript, setTranscript] = useState("");
   const [loading, setLoading] = useState(false);
@@ -108,70 +123,110 @@ export default function Page() {
     void run(EXAMPLE_TRANSCRIPT);
   }
 
+  const chars = transcript.trim().length;
+
   return (
-    <main className="mx-auto max-w-3xl p-6 space-y-6">
-      <header className="space-y-3">
-        <h1 className="text-3xl font-bold">Watching isn&apos;t learning.</h1>
-        <p className="text-base text-gray-700">
+    <main className="mx-auto w-full max-w-2xl px-5 py-14 sm:py-20">
+      <header className="space-y-5">
+        <h1 className="text-[2rem] font-semibold leading-[1.1] tracking-tight sm:text-5xl">
+          Watching isn&apos;t learning.
+        </h1>
+        <p className="max-w-xl text-[15px] leading-relaxed text-muted sm:text-base">
           This tool tests whether you actually understood a video — every question
           forces you to apply concepts to NEW situations, never to recall the
           video&apos;s own examples. Paste a transcript (or try the example) and find
           out what stuck.
         </p>
-        {/* Solid, unlike the outlined controls below: with an empty textarea this
+        {/* Accent-filled, unlike every other control: with an empty textarea this
             is the lowest-friction way in, so it carries the visual weight. */}
         <button
           type="button"
-          className="bg-black text-white px-4 py-2 font-medium disabled:opacity-50"
+          className={`${BTN_ACCENT} group`}
           disabled={loading}
           onClick={loadExample}
         >
           Try an example
+          <span
+            aria-hidden
+            className="transition-transform group-hover:translate-x-0.5"
+          >
+            →
+          </span>
         </button>
       </header>
 
-      <form onSubmit={onSubmit} className="space-y-2">
-        <textarea
-          className="w-full h-64 border p-2 font-mono text-sm"
-          placeholder="Paste raw transcript here…"
-          value={transcript}
-          onChange={(e) => setTranscript(e.target.value)}
-        />
-        {/* Only disabled while in flight. A too-short transcript is allowed through
-            so the user gets an explanation instead of a dead button. */}
-        <button
-          type="submit"
-          className="border px-3 py-1 disabled:opacity-50"
-          disabled={loading}
-        >
-          {loading ? LOADING_PHASES[phase] : "Generate quiz"}
-        </button>
+      <form onSubmit={onSubmit} className="mt-12">
+        {/* Textarea and submit share one panel so they read as a single control. */}
+        <div className="overflow-hidden rounded-xl border border-line bg-surface transition-colors focus-within:border-accent/50">
+          <textarea
+            className="block h-52 w-full resize-none bg-transparent p-4 text-sm leading-relaxed outline-none placeholder:text-muted sm:h-64"
+            placeholder="Paste raw transcript here…"
+            value={transcript}
+            onChange={(e) => setTranscript(e.target.value)}
+          />
+          <div className="flex items-center justify-between gap-3 border-t border-line bg-elevated px-4 py-3">
+            <span className="text-xs tabular-nums text-muted">
+              {chars > 0
+                ? `${chars.toLocaleString()} characters`
+                : `${MIN_TRANSCRIPT_CHARS} characters minimum`}
+            </span>
+            {/* Only disabled while in flight. A too-short transcript is allowed
+                through so the user gets an explanation, not a dead button. */}
+            <button type="submit" className={BTN_SOLID} disabled={loading}>
+              {loading ? "Generating…" : "Generate quiz"}
+            </button>
+          </div>
+        </div>
       </form>
 
-      {/* aria-live so the wait, and the phase change, are announced not just shown. */}
-      {loading && (
-        <div role="status" aria-live="polite" className="border p-3 text-sm">
-          {LOADING_PHASES[phase]} this usually takes 20–30 seconds.
-        </div>
-      )}
+      <div className="mt-8">
+        {loading && <Loading phase={phase} />}
 
-      {result && !result.ok && (
-        <div className="border border-red-500 p-3 space-y-3">
-          <div className="font-bold text-red-700">Couldn&apos;t generate a quiz</div>
-          <div className="text-sm">{FAILURE_COPY[result.stage]}</div>
-          <button
-            type="button"
-            className="border px-3 py-1 disabled:opacity-50"
-            disabled={loading}
-            onClick={() => void run()}
-          >
-            Try again
-          </button>
-        </div>
-      )}
+        {result && !result.ok && (
+          <div className={`${CARD} border-bad/30 bg-bad/[0.04] p-6`}>
+            <h2 className="text-base font-semibold tracking-tight text-bad">
+              Couldn&apos;t generate a quiz
+            </h2>
+            <p className="mt-2 text-sm leading-relaxed text-muted">
+              {FAILURE_COPY[result.stage]}
+            </p>
+            <button
+              type="button"
+              className={`${BTN_GHOST} mt-5`}
+              disabled={loading}
+              onClick={() => void run()}
+            >
+              Try again
+            </button>
+          </div>
+        )}
 
-      {result?.ok && <Result key={runId} result={result} />}
+        {result?.ok && <Result key={runId} result={result} />}
+      </div>
     </main>
+  );
+}
+
+/* aria-live so the wait, and the phase change, are announced and not just shown. */
+function Loading({ phase }: { phase: number }) {
+  return (
+    <div role="status" aria-live="polite" className={`${CARD} p-6`}>
+      <div className="flex items-center gap-3">
+        <span className="relative flex h-2 w-2 shrink-0">
+          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-accent opacity-60" />
+          <span className="relative inline-flex h-2 w-2 rounded-full bg-accent" />
+        </span>
+        <span className="text-sm font-medium">{LOADING_PHASES[phase]}</span>
+      </div>
+      <p className="mt-2 pl-5 text-sm text-muted">
+        This usually takes 20–30 seconds.
+      </p>
+      {/* Sweeps rather than filling: we cannot estimate completion, and a fake
+          percentage that stalls at 90% is worse than an honest indeterminate bar. */}
+      <div className="mt-5 h-1 w-full overflow-hidden rounded-full bg-elevated">
+        <div className="animate-sweep h-full w-1/4 rounded-full bg-accent" />
+      </div>
+    </div>
   );
 }
 
@@ -184,47 +239,49 @@ function Result({ result }: { result: GenerateSuccess }) {
   // Confidently non-educational is the only rejection.
   const rejected = !data.is_educational && !lowConfidence;
 
+  // `!data.quiz` also lands here: with nothing to render, this is the only sane fallback.
+  if (rejected || !data.quiz) {
+    return (
+      <div className={`${CARD} p-6`}>
+        <h2 className="text-base font-semibold tracking-tight">
+          {rejected ? "Out of scope" : "No quiz generated"}
+        </h2>
+        {rejected ? (
+          <>
+            <p className="mt-2 text-sm leading-relaxed text-muted">
+              This doesn&apos;t appear to be educational content.
+            </p>
+            <p className="mt-4 border-l-2 border-line pl-4 text-sm leading-relaxed text-fg/80">
+              {data.reason}
+            </p>
+          </>
+        ) : (
+          <p className="mt-2 text-sm leading-relaxed text-muted">
+            Couldn&apos;t generate a quiz for this content — try another video.
+          </p>
+        )}
+      </div>
+    );
+  }
+
   return (
-    <div className="space-y-4">
-      {/* `!data.quiz` also lands here: with nothing to render, this is the only sane fallback. */}
-      {rejected || !data.quiz ? (
-        <div className="border p-3 space-y-1">
-          <div className="font-bold">
-            {rejected ? "Out of scope" : "No quiz generated"}
-          </div>
-          {rejected ? (
-            <>
-              <div className="text-sm">
-                This doesn&apos;t appear to be educational content.
-              </div>
-              <div className="text-sm text-gray-600">{data.reason}</div>
-            </>
-          ) : (
-            <div className="text-sm">
-              Couldn&apos;t generate a quiz for this content — try another video.
-            </div>
-          )}
+    <div className="space-y-6">
+      {lowConfidence && !bannerDismissed && (
+        <div className="flex items-start gap-3 rounded-xl border border-warn/30 bg-warn/[0.07] px-4 py-3.5">
+          <p className="grow text-sm leading-relaxed text-fg/90">
+            This content is loosely structured — quiz quality may be uneven.
+          </p>
+          <button
+            type="button"
+            aria-label="Dismiss"
+            className="-mr-1 -mt-0.5 shrink-0 rounded-md p-1 text-muted transition-colors hover:bg-warn/15 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+            onClick={() => setBannerDismissed(true)}
+          >
+            <XIcon />
+          </button>
         </div>
-      ) : (
-        <>
-          {lowConfidence && !bannerDismissed && (
-            <div className="border border-yellow-600 bg-yellow-50 p-3 text-sm flex gap-3">
-              <span className="grow">
-                This content is loosely structured — quiz quality may be uneven.
-              </span>
-              <button
-                type="button"
-                aria-label="Dismiss"
-                className="shrink-0"
-                onClick={() => setBannerDismissed(true)}
-              >
-                ✕
-              </button>
-            </div>
-          )}
-          <QuizView quiz={data.quiz} />
-        </>
       )}
+      <QuizView quiz={data.quiz} />
     </div>
   );
 }
@@ -233,6 +290,8 @@ function QuizView({ quiz }: { quiz: Quiz }) {
   const [answers, setAnswers] = useState<Record<number, number>>({});
   const [checked, setChecked] = useState(false);
 
+  const total = quiz.questions.length;
+  const answered = Object.keys(answers).length;
   const score = quiz.questions.reduce(
     (n, q, i) => n + (answers[i] === q.correct_index ? 1 : 0),
     0,
@@ -240,54 +299,200 @@ function QuizView({ quiz }: { quiz: Quiz }) {
 
   return (
     <div className="space-y-6">
-      {quiz.questions.map((q, i) => (
-        <div key={i} className="border p-3 space-y-2">
-          <div className="font-medium">
-            {i + 1}. {q.question}
+      {/* Before checking, progress is the useful number; after, it is the score.
+          They never appear at once, so the page never shows two progress bars. */}
+      {!checked ? (
+        <div className="space-y-2">
+          <div className="flex items-baseline justify-between">
+            <span className={LABEL}>Quiz</span>
+            <span className="text-xs tabular-nums text-muted">
+              {answered} of {total} answered
+            </span>
           </div>
-          <div className="space-y-1">
-            {q.options.map((opt, j) => (
-              <label key={j} className="block text-sm">
-                <input
-                  type="radio"
-                  name={`q${i}`}
-                  checked={answers[i] === j}
-                  disabled={checked}
-                  onChange={() => setAnswers((a) => ({ ...a, [i]: j }))}
-                />{" "}
-                {opt}
-                {checked && j === q.correct_index && " ✅"}
-                {checked && answers[i] === j && j !== q.correct_index && " ❌"}
-              </label>
-            ))}
+          <div className="h-1 w-full overflow-hidden rounded-full bg-elevated">
+            <div
+              className="h-full rounded-full bg-accent/60 transition-[width] duration-300"
+              style={{ width: `${(answered / total) * 100}%` }}
+            />
           </div>
-          {checked && (
-            <div className="text-sm bg-gray-100 p-2">
-              <strong>Explanation:</strong> {q.explanation}
-            </div>
-          )}
         </div>
-      ))}
+      ) : (
+        <ScoreCard score={score} total={total} />
+      )}
+
+      <div className="space-y-4">
+        {quiz.questions.map((q, i) => (
+          <div key={i} className={`${CARD} p-5`}>
+            <div className="flex gap-3">
+              <span className="mt-0.5 grid h-6 w-6 shrink-0 place-items-center rounded-md bg-elevated text-xs font-medium tabular-nums text-muted">
+                {i + 1}
+              </span>
+              <p className="text-[15px] font-medium leading-relaxed">{q.question}</p>
+            </div>
+
+            <div className="mt-4 space-y-2">
+              {q.options.map((opt, j) => {
+                const picked = answers[i] === j;
+                const correct = j === q.correct_index;
+                return (
+                  <label
+                    key={j}
+                    className={`flex items-start gap-3 rounded-lg border px-3.5 py-3 text-sm leading-relaxed transition-colors ${optionClass(
+                      { checked, picked, correct },
+                    )}`}
+                  >
+                    {/* Visually hidden but still the real radio: arrow-key group
+                        navigation keeps working. The ring moves to the sibling
+                        mark so keyboard focus stays visible. */}
+                    <input
+                      type="radio"
+                      name={`q${i}`}
+                      className="peer sr-only"
+                      checked={picked}
+                      disabled={checked}
+                      onChange={() => setAnswers((a) => ({ ...a, [i]: j }))}
+                    />
+                    <span className="mt-0.5 shrink-0 rounded-full peer-focus-visible:ring-2 peer-focus-visible:ring-accent/60 peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-surface">
+                      <OptionMark checked={checked} picked={picked} correct={correct} />
+                    </span>
+                    <span>{opt}</span>
+                  </label>
+                );
+              })}
+            </div>
+
+            {checked && (
+              <div className="mt-4 rounded-lg bg-elevated px-4 py-3">
+                <div className={LABEL}>Explanation</div>
+                <p className="mt-1.5 text-sm leading-relaxed text-fg/85">
+                  {q.explanation}
+                </p>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
 
       {!checked ? (
-        <button className="border px-3 py-1" onClick={() => setChecked(true)}>
+        <button type="button" className={BTN_SOLID} onClick={() => setChecked(true)}>
           Check answers
         </button>
       ) : (
-        <div className="space-y-4">
-          <div className="font-bold">
-            Score: {score} / {quiz.questions.length}
-          </div>
-          <div>
-            <div className="font-bold">Go deeper</div>
-            <ul className="list-disc pl-6 text-sm">
+        quiz.deeper_topics.length > 0 && (
+          <section>
+            <h2 className={LABEL}>Go deeper</h2>
+            <ul className={`${CARD} mt-3 divide-y divide-line`}>
               {quiz.deeper_topics.map((t, i) => (
-                <li key={i}>{t}</li>
+                <li key={i} className="flex gap-3 px-4 py-3.5 text-sm leading-relaxed">
+                  <span aria-hidden className="shrink-0 text-accent">
+                    →
+                  </span>
+                  <span>{t}</span>
+                </li>
               ))}
             </ul>
-          </div>
-        </div>
+          </section>
+        )
       )}
     </div>
+  );
+}
+
+function ScoreCard({ score, total }: { score: number; total: number }) {
+  return (
+    <div className={`${CARD} p-6`}>
+      <div className={LABEL}>Score</div>
+      <div className="mt-1.5 flex items-baseline gap-1.5">
+        <span className="text-5xl font-semibold tabular-nums tracking-tight">
+          {score}
+        </span>
+        <span className="text-xl font-medium tabular-nums text-muted">/ {total}</span>
+      </div>
+      <div className="mt-5 h-1.5 w-full overflow-hidden rounded-full bg-elevated">
+        <div
+          className="h-full rounded-full bg-accent transition-[width] duration-700"
+          style={{ width: `${(score / total) * 100}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Option styling in one place. Before checking, the only signal is which option
+ * is selected; after, correctness outranks selection — the right answer is always
+ * marked, and a wrong pick is marked as wrong.
+ */
+function optionClass({
+  checked,
+  picked,
+  correct,
+}: {
+  checked: boolean;
+  picked: boolean;
+  correct: boolean;
+}): string {
+  if (!checked) {
+    return picked
+      ? "cursor-pointer border-accent bg-accent/[0.07]"
+      : "cursor-pointer border-line hover:border-muted/40 hover:bg-elevated";
+  }
+  if (correct) return "border-ok/40 bg-ok/[0.07]";
+  if (picked) return "border-bad/40 bg-bad/[0.06]";
+  return "border-line opacity-60";
+}
+
+function OptionMark({
+  checked,
+  picked,
+  correct,
+}: {
+  checked: boolean;
+  picked: boolean;
+  correct: boolean;
+}) {
+  if (checked && correct) return <CheckIcon className="text-ok" />;
+  if (checked && picked) return <XIcon className="text-bad" />;
+  // Unanswered and after-the-fact wrong options share the same empty dot: neither
+  // needs a verdict glyph.
+  return (
+    <span
+      className={`block h-4 w-4 rounded-full border-2 transition-colors ${
+        picked ? "border-accent bg-accent" : "border-line"
+      }`}
+    />
+  );
+}
+
+function CheckIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      className={`h-4 w-4 ${className}`}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M3 8.5 6.5 12 13 4" />
+    </svg>
+  );
+}
+
+function XIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      className={`h-4 w-4 ${className}`}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      aria-hidden
+    >
+      <path d="M4 4l8 8M12 4l-8 8" />
+    </svg>
   );
 }

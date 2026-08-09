@@ -1,3 +1,81 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/**
+ * Design tokens.
+ *
+ * Every colour in the app resolves through these variables (see tailwind.config.ts),
+ * which is what makes dark mode a single media query instead of a `dark:` variant
+ * on every element. Values are bare HSL triplets so Tailwind can apply opacity
+ * modifiers like `bg-accent/10`.
+ */
+:root {
+  color-scheme: light dark;
+
+  --bg: 0 0% 100%;
+  --surface: 0 0% 100%;
+  --elevated: 240 20% 98%;
+  --line: 240 6% 90%;
+  --fg: 240 10% 8%;
+  --muted: 240 4% 46%;
+
+  /* The single accent. Used for the entry-point CTA, focus rings, selection, and
+     the "go deeper" markers — nowhere else. */
+  --accent: 245 72% 58%;
+  --accent-fg: 0 0% 100%;
+
+  /* Semantic state, not decoration: these only ever mean right/wrong/caveat. */
+  --ok: 152 60% 36%;
+  --bad: 0 72% 51%;
+  --warn: 38 82% 42%;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: 240 10% 4%;
+    --surface: 240 8% 6.5%;
+    --elevated: 240 7% 10%;
+    --line: 240 6% 16%;
+    --fg: 0 0% 97%;
+    --muted: 240 5% 58%;
+
+    --accent: 245 85% 70%;
+    --accent-fg: 240 30% 8%;
+
+    --ok: 152 55% 52%;
+    --bad: 0 80% 68%;
+    --warn: 38 92% 60%;
+  }
+}
+
+body {
+  /* System stack rather than a webfont: no network fetch at build time, and it
+     renders as Segoe UI Variable / SF Pro, which is the look we're after anyway. */
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+}
+
+/* Indeterminate progress: we genuinely cannot estimate completion, so the bar
+   sweeps rather than filling to a fake percentage. */
+@keyframes sweep {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(400%);
+  }
+}
+
+.animate-sweep {
+  animation: sweep 1.6s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-sweep {
+    animation: none;
+    transform: translateX(0);
+    width: 100%;
+    opacity: 0.4;
+  }
+}
