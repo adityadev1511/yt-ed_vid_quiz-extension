@@ -248,7 +248,7 @@ export default function Page() {
     <main className="mx-auto w-full max-w-2xl px-5 py-14 sm:py-20">
       <header className="space-y-5">
         <h1 className="text-[2rem] font-semibold leading-[1.1] tracking-tight sm:text-5xl">
-          Watching isn&apos;t learning.
+          Learn, don&apos;t watch.
         </h1>
         <p className="max-w-xl text-[15px] leading-relaxed text-muted sm:text-base">
           This tool tests whether you actually understood a video — every question

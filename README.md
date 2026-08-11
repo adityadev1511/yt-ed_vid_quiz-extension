@@ -1,4 +1,4 @@
-# Watching Isn't Learning
+# Learn, Don't Watch
 
 Paste an educational YouTube video's URL (or its transcript) and get a quiz
 that tests whether you actually *understood* it — not whether you remember it.
