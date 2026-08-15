@@ -5,7 +5,7 @@ that tests whether you actually *understood* it — not whether you remember it.
 Every medium and hard question forces you to apply the video's concepts to
 situations the video never showed you.
 
-**Live app:** https://app-2b7a-3000.prg1.zerops.app
+**Live app:** https://yt-ed-vid-quiz-extension.vercel.app
 *Built solo in 48 hours for the Zerops Challenge, August 2026.*
 
 ## The argument
@@ -42,9 +42,10 @@ to the classification before producing questions) → Zod validation at the
 boundary → quiz UI with explanations and "go deeper" topic suggestions.
 
 **Stack:** Next.js 14 (App Router, API routes as backend), TypeScript,
-Tailwind, PostgreSQL (Zerops managed) for the quiz cache — `pg` directly, no
-ORM, one table. Deployed on Zerops (zerops.yml, zcli push pipeline). Built
-end-to-end with Claude Code as the coding agent, with deploy-and-verify
+Tailwind, and an optional PostgreSQL quiz cache — `pg` directly, no ORM, one
+table (the current deployment runs stateless; see below). Deployed on Vercel,
+auto-deploying from `main`; originally deployed on Zerops for the challenge.
+Built end-to-end with Claude Code as the coding agent, with deploy-and-verify
 loops on the live URL after every feature.
 
 **LLM gateway:** Gemini 2.5 Flash primary, openai/gpt-oss-120b on Groq as

@@ -137,7 +137,7 @@ function stripFence(text: string): string {
 
 /**
  * The single failure exit. Everything diagnostic goes to the server log (and so
- * to the Zerops runtime log); the client gets only the stage. If you need more
+ * to the platform's runtime log); the client gets only the stage. If you need more
  * context to debug a live issue, add it to the log call here — never to the
  * response body.
  */

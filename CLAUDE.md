@@ -54,7 +54,11 @@ LLM gateway patterns (Gemini + Groq fallback), TypeScript, Node.js.
 
 \- NO Redis/caching in MVP. Quiz caching is done at the DB level (see below).
 
-\- Deployment target: Railway (app) + Supabase cloud (DB).
+\- Deployment: Vercel Hobby (free), auto-deploys from GitHub main
+&#x20; (https://yt-ed-vid-quiz-extension.vercel.app). Previously Zerops (project
+&#x20; deleted when challenge credits ran out — do not go back to paid credits).
+&#x20; DATABASE\_URL is currently unset in production: the app runs stateless, no
+&#x20; quiz cache. Free Postgres (Supabase/Neon) can be added later for the cache.
 
 
 

@@ -15,8 +15,12 @@ import { LlmResponseSchema, type LlmResponse } from "./schema";
  * Short on purpose. These bound how long a sick database can delay a request
  * that would otherwise succeed without it — the cache is an optimisation, and
  * an optimisation that adds seconds to a miss is a regression.
+ *
+ * Connect allows 5s rather than 2s because Neon scales to zero when idle and a
+ * cold start can exceed 2s — which would trip the breaker on the first request
+ * after every quiet spell, skipping the cache exactly when it was about to work.
  */
-const CONNECT_TIMEOUT_MS = 2_000;
+const CONNECT_TIMEOUT_MS = 5_000;
 const QUERY_TIMEOUT_MS = 3_000;
 
 /**

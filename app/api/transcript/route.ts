@@ -66,7 +66,7 @@ async function handle(req: Request): Promise<NextResponse<TranscriptResult>> {
 
 /**
  * The single failure exit. The reason is the only thing that crosses the wire;
- * everything diagnostic goes to the server log, and so to the Zerops runtime log.
+ * everything diagnostic goes to the server log, and so to the platform's runtime log.
  */
 function fail(
   status: number,
