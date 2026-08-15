@@ -57,8 +57,8 @@ LLM gateway patterns (Gemini + Groq fallback), TypeScript, Node.js.
 \- Deployment: Vercel Hobby (free), auto-deploys from GitHub main
 &#x20; (https://yt-ed-vid-quiz-extension.vercel.app). Previously Zerops (project
 &#x20; deleted when challenge credits ran out — do not go back to paid credits).
-&#x20; DATABASE\_URL is currently unset in production: the app runs stateless, no
-&#x20; quiz cache. Free Postgres (Supabase/Neon) can be added later for the cache.
+&#x20; Quiz cache: Neon free-tier Postgres (via Vercel Marketplace), DATABASE\_URL
+&#x20; set in Vercel env vars and .env.local. Cache verified live 2026-08-15.
 
 
 

@@ -42,8 +42,8 @@ to the classification before producing questions) → Zod validation at the
 boundary → quiz UI with explanations and "go deeper" topic suggestions.
 
 **Stack:** Next.js 14 (App Router, API routes as backend), TypeScript,
-Tailwind, and an optional PostgreSQL quiz cache — `pg` directly, no ORM, one
-table (the current deployment runs stateless; see below). Deployed on Vercel,
+Tailwind, and an optional PostgreSQL quiz cache (Neon) — `pg` directly, no
+ORM, one table. Deployed on Vercel,
 auto-deploying from `main`; originally deployed on Zerops for the challenge.
 Built end-to-end with Claude Code as the coding agent, with deploy-and-verify
 loops on the live URL after every feature.
