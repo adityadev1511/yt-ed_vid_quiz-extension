@@ -4,8 +4,6 @@ out/
 build/
 .env
 .env.local
-# May contain real API keys once filled in — never commit.
-zerops-import.yml
 *.tsbuildinfo
 next-env.d.ts
 .DS_Store
